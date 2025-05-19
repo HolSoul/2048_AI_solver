@@ -1,1 +1,5 @@
-pygame 
+pygame
+numpy
+torch
+torchvision
+torchaudio
