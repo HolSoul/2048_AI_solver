@@ -1,6 +1,6 @@
 import numpy as np
 from game import Game # Наша игра
-from ai_solver import DQNAgent # Наш агент на PyTorch
+from ai_solver import DQNAgent, DEVICE # Наш агент на PyTorch и DEVICE
 import matplotlib.pyplot as plt # Для графиков обучения
 
 # --- Функции для состояния и награды ---
@@ -48,7 +48,7 @@ scores_history = []
 avg_scores_history = []
 max_tile_history = [] # Для отслеживания максимальной плитки
 
-print(f"Начинаем обучение на {agent.DEVICE}...")
+print(f"Начинаем обучение на {DEVICE}...")
 
 # --- Цикл обучения ---
 for episode in range(1, NUM_EPISODES + 1):

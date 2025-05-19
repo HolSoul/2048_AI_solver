@@ -1,7 +1,31 @@
 import pygame
 import sys
+import os # Для проверки существования файла модели
+import numpy as np # Для get_state
 from game import Game
-from ai_solver import AISolver
+# from ai_solver import AISolver # Старый placeholder, если был
+from ai_solver import DQNAgent, DEVICE, QNetwork # Наш агент и устройство, импортируем также QNetwork и torch из ai_solver, если они там
+
+# Попытка импортировать torch глобально в main.py для проверки в initialize_ai_agent
+if 'torch' not in globals(): # Если еще не импортирован (например, из ai_solver)
+    try:
+        import torch
+        print("(main.py) PyTorch импортирован для проверки.")
+    except ImportError:
+        print("(main.py) PyTorch не найден. ИИ не будет доступен.")
+        torch = None 
+
+# Копируем get_state из train_agent.py (или можно импортировать, если вынести в утилиты)
+def get_state(board):
+    flat_board = np.array(board).flatten()
+    processed_board = np.zeros_like(flat_board, dtype=float)
+    for i, tile_val in enumerate(flat_board):
+        if tile_val == 0:
+            processed_board[i] = 0.0
+        else:
+            # Нормализация на log2(2048) = 11.0. Убедитесь, что это соответствует обучению.
+            processed_board[i] = np.log2(tile_val) / 11.0 
+    return processed_board.astype(np.float32)
 
 # Инициализация Pygame
 pygame.init()
@@ -14,10 +38,11 @@ GRID_SIZE = 4
 CELL_SIZE = SCREEN_WIDTH // GRID_SIZE
 GRID_LINE_WIDTH = 6
 BACKGROUND_COLOR = (187, 173, 160)
-GRID_COLOR = (205, 193, 180)
+GRID_COLOR = (205, 193, 180) # Не используется напрямую для сетки, но как фон ячеек
 FONT_COLOR = (119, 110, 101)
 SCORE_FONT_COLOR = (238, 228, 218)
 GAME_OVER_FONT_COLOR = (119, 110, 101)
+AI_TEXT_COLOR = (255, 0, 0) # Цвет для текста "AI Active"
 
 
 # Цвета для плиток (значение: (цвет_плитки, цвет_текста))
@@ -43,12 +68,14 @@ try:
     SCORE_LABEL_FONT = pygame.font.SysFont("arial", 20, bold=True)
     SCORE_FONT = pygame.font.SysFont("arial", 25, bold=True)
     GAME_OVER_FONT = pygame.font.SysFont("arial", 40, bold=True)
+    AI_STATUS_FONT = pygame.font.SysFont("arial", 18, bold=True)
 except pygame.error as e:
     print(f"Ошибка загрузки шрифта Arial: {e}. Используется шрифт по умолчанию.")
     TILE_FONT = pygame.font.Font(None, 55) # Шрифт по умолчанию, если Arial недоступен
     SCORE_LABEL_FONT = pygame.font.Font(None, 30)
     SCORE_FONT = pygame.font.Font(None, 35)
     GAME_OVER_FONT = pygame.font.Font(None, 60)
+    AI_STATUS_FONT = pygame.font.Font(None, 25)
 
 
 # Настройка экрана
@@ -58,6 +85,38 @@ pygame.display.set_caption("2048 Game")
 # Анимации
 ANIMATION_DURATION_MS = 150 # длительность анимации в миллисекундах
 active_animations = [] # Теперь будет содержать более сложные объекты анимации
+
+# --- Переменные для управления ИИ ---
+ai_agent = None
+ai_active = False
+ai_model_loaded = False
+DEFAULT_MODEL_FILENAME = "dqn_2048_pytorch_ep400.pth" # Или конкретный файл, например dqn_2048_pytorch_ep2000.pth
+AI_MOVE_DELAY_MS = 500 # Задержка между ходами ИИ в миллисекундах (0.5 секунды)
+
+def initialize_ai_agent(filename=DEFAULT_MODEL_FILENAME):
+    global ai_agent, ai_model_loaded, torch # Указываем, что torch - глобальная переменная
+    if torch is None: 
+        print("PyTorch не доступен. ИИ не может быть загружен.")
+        ai_model_loaded = False
+        return
+    try:
+        game_temp = Game() # Для получения state_size
+        state_size = game_temp.size * game_temp.size
+        action_size = 4 
+        
+        loaded_agent = DQNAgent(state_size, action_size) # Создаем экземпляр
+        # Путь к модели формируется внутри agent.load() на основе его model_save_path
+        loaded_agent.load(filename) # Загружаем веса
+        loaded_agent.policy_net.eval() # Важно перевести в режим оценки
+        if hasattr(loaded_agent, 'target_net'): # Если есть target_net, его тоже в eval
+             loaded_agent.target_net.eval()
+        
+        ai_agent = loaded_agent
+        ai_model_loaded = True
+        print(f"Агент ИИ успешно загружен с {filename} на устройстве {DEVICE}.")
+    except Exception as e:
+        print(f"Ошибка при загрузке/инициализации агента ИИ: {e}")
+        ai_model_loaded = False
 
 # --- Вспомогательные функции для анимаций ---
 def rc_to_pixels(r, c):
@@ -129,6 +188,19 @@ def draw_board(board_data, current_score):
     
     screen.blit(score_label_surface, (20, SCREEN_WIDTH + 10))
     screen.blit(score_value_surface, (20, SCREEN_WIDTH + 35))
+
+    # Отображение статуса ИИ
+    if ai_active and ai_model_loaded:
+        status_text = "AI ACTIVE (M to toggle)"
+        status_color = AI_TEXT_COLOR
+    elif ai_active and not ai_model_loaded:
+        status_text = "AI LOADING FAILED (M to toggle)"
+        status_color = AI_TEXT_COLOR
+    else:
+        status_text = "Human Player (M for AI)"
+        status_color = FONT_COLOR
+    ai_status_surface = AI_STATUS_FONT.render(status_text, True, status_color)
+    screen.blit(ai_status_surface, (SCREEN_WIDTH - ai_status_surface.get_width() - 10, SCREEN_WIDTH + 15))
 
     for r in range(GRID_SIZE):
         for c in range(GRID_SIZE):
@@ -240,7 +312,7 @@ def draw_board(board_data, current_score):
             current_y = start_y + (end_y - start_y) * progress
             
             # Эта плитка исчезнет в конце, так что можно добавить эффект альфа-канала
-            alpha = 255 * (1 - progress) if progress > 0.7 else 255 
+            alpha = 255 * (1 - progress**2) # Быстрее исчезает
             
             tile_color, text_color = get_tile_colors(val)
             
@@ -264,24 +336,18 @@ def draw_board(board_data, current_score):
             related_moving_finished = True
             for other_anim in active_animations:
                 if other_anim['type'] == 'merge_moving_tile' and other_anim['to_rc'] == anim['pos_rc']:
-                    if other_anim['progress'] < 1.0:
+                    if other_anim['progress'] < 0.95:
                         related_moving_finished = False
                         break
             
-            if related_moving_finished or progress >= 0.9: # Рисуем ее, когда движение почти/завершено
-                                                        # или когда ее собственная анимация "пульсации" активна
+            if related_moving_finished or progress > 0.1: # Начинаем пульсацию немного раньше или когда движение завершено
                 r, c = anim['pos_rc']
                 # Рисуем плитку с merged_value
                 # Можно добавить эффект пульсации здесь, изменяя размер или цвет в зависимости от anim['progress']
                 merged_val = anim['merged_value']
                 tile_color, text_color = get_tile_colors(merged_val)
                 
-                current_size_factor = 1.0
-                if progress < 0.5 : # первая половина - увеличение
-                    current_size_factor = 1.0 + 0.2 * (progress * 2) # Увеличение до 1.2
-                elif progress < 1.0: # вторая половина - уменьшение обратно до 1.0
-                    current_size_factor = 1.2 - 0.2 * ((progress - 0.5) * 2) # Уменьшение до 1.0
-                
+                current_size_factor = 1.0 + 0.2 * np.sin(progress * np.pi) # Плавная пульсация (0->0.2->0)
                 pulse_size = CELL_SIZE * current_size_factor
                 pulse_offset = (CELL_SIZE - pulse_size) / 2
                 pulse_x, pulse_y = rc_to_pixels(r,c)
@@ -308,46 +374,72 @@ def draw_game_over():
     screen.blit(restart_text, restart_rect)
 
 def main():
-    game = Game() # Создаем экземпляр нашей игры из game.py
+    global ai_active, ai_agent, ai_model_loaded, torch
+    game = Game()
     clock = pygame.time.Clock()
     running = True
     game_over_state = False
+    ai_last_move_time = 0 # Таймер для задержки ходов ИИ
 
     while running:
         current_time = pygame.time.get_ticks()
+        human_made_move_this_frame = False
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             
             if event.type == pygame.KEYDOWN:
-                if not active_animations: # Принимаем ввод, только если нет активных анимаций
-                    if game_over_state:
-                        if event.key == pygame.K_q:
-                            running = False
-                        if event.key == pygame.K_r:
-                            game = Game() # Новая игра
-                            game_over_state = False
-                            active_animations.clear() # Очищаем анимации для новой игры
+                if event.key == pygame.K_q:
+                    running = False 
+                if event.key == pygame.K_m:
+                    ai_active = not ai_active
+                    if ai_active and not ai_model_loaded:
+                        print("Активация ИИ. Загрузка модели...")
+                        initialize_ai_agent() 
+                        if not ai_model_loaded:
+                            print("Не удалось загрузить модель ИИ.")
+                            ai_active = False
+                        else:
+                            ai_last_move_time = current_time # Сброс таймера при активации ИИ, чтобы он не ходил сразу
                     else:
-                        animation_events_from_game = []
-                        if event.key == pygame.K_UP:
-                            animation_events_from_game = game.move(0) # 0: Up
-                        elif event.key == pygame.K_DOWN:
-                            animation_events_from_game = game.move(1) # 1: Down
-                        elif event.key == pygame.K_LEFT:
-                            animation_events_from_game = game.move(2) # 2: Left
-                        elif event.key == pygame.K_RIGHT:
-                            animation_events_from_game = game.move(3) # 3: Right
-                        elif event.key == pygame.K_q: # Для выхода во время игры
-                            running = False
-                        
-                        if animation_events_from_game:
-                            for ev in animation_events_from_game:
-                                add_animation_from_event(ev)
-                        
-                        if game.is_game_over():
-                            game_over_state = True
+                        print(f"ИИ {'активирован' if ai_active else 'деактивирован'}.")
+                
+                if game_over_state:
+                    if event.key == pygame.K_r:
+                        game = Game()
+                        game_over_state = False
+                        ai_active = False 
+                        ai_model_loaded = False 
+                        active_animations.clear()
+                        ai_last_move_time = 0 # Сброс таймера
+                elif not ai_active and not active_animations: 
+                    animation_events_from_game = []
+                    if event.key == pygame.K_UP: animation_events_from_game = game.move(0)
+                    elif event.key == pygame.K_DOWN: animation_events_from_game = game.move(1)
+                    elif event.key == pygame.K_LEFT: animation_events_from_game = game.move(2)
+                    elif event.key == pygame.K_RIGHT: animation_events_from_game = game.move(3)
+                    
+                    if animation_events_from_game:
+                        human_made_move_this_frame = True
+                        for ev in animation_events_from_game:
+                            add_animation_from_event(ev)
+                    if game.is_game_over(): game_over_state = True
+        
+        # --- Логика хода ИИ --- 
+        if ai_active and ai_model_loaded and not game_over_state and not active_animations and not human_made_move_this_frame:
+            if current_time - ai_last_move_time >= AI_MOVE_DELAY_MS:
+                current_game_state_for_ai = get_state(game.board)
+                if ai_agent: 
+                    ai_action = ai_agent.act(current_game_state_for_ai)
+                    animation_events_from_game = game.move(ai_action)
+                    if animation_events_from_game:
+                        for ev in animation_events_from_game:
+                            add_animation_from_event(ev)
+                    # Обновляем таймер после КАЖДОЙ попытки хода ИИ, даже если ход ничего не изменил
+                    # чтобы была задержка перед следующей попыткой.
+                    ai_last_move_time = current_time 
+                    if game.is_game_over(): game_over_state = True
         
         # Обновление анимаций
         if active_animations:
@@ -364,7 +456,7 @@ def main():
             draw_game_over()
 
         pygame.display.flip() # Обновляем весь экран
-        clock.tick(30) # Ограничение до 30 FPS
+        clock.tick(60) # Увеличил FPS для более плавных анимаций
 
     pygame.quit()
     sys.exit()
