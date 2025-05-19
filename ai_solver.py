@@ -21,16 +21,15 @@ except ImportError as e:
 
 # Нейронная сеть для Q-функции
 class QNetwork(nn.Module):
-    def __init__(self, state_size, action_size, hidden_size1=64, hidden_size2=64):
+    def __init__(self, state_size, action_size):
         super(QNetwork, self).__init__()
-        # В PyTorch state_size - это количество входных признаков
-        self.fc1 = nn.Linear(state_size, hidden_size1)
-        self.fc2 = nn.Linear(hidden_size1, hidden_size2)
-        self.fc3 = nn.Linear(hidden_size2, action_size)
+        self.fc1 = nn.Linear(state_size, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, action_size)
 
     def forward(self, state):
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
+        x = torch.relu(self.fc1(state))
+        x = torch.relu(self.fc2(x))
         return self.fc3(x)
 
 class DQNAgent:

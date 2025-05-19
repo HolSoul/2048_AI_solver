@@ -55,25 +55,25 @@ def calculate_reward(score_before, score_after,
     
     if game_over_flag: 
         if max_tile_after >= 2048:
-            reward += 200 # Большая награда за достижение 2048 и завершение игры
+            reward += 200 
         elif max_tile_after >= 1024:
-            reward += 100 # Большая награда за достижение 1024 и завершение игры
+            reward += 100 
         elif max_tile_after >= 512:
-            reward += 50 # Большая награда за достижение 512 и завершение игры
+            reward += 50 
         elif max_tile_after >= 256:
-            reward += 1 # Большая награда за достижение 256 и завершение игры
+            reward += 5 
         elif max_tile_after >= 128:
-            reward -= 25 # Меньший штраф, если достигли 128
+            reward -= 25 
         elif max_tile_after >= 64:
-            reward -= 75 # Средний штраф, если достигли 64
+            reward -= 75 
         else:
             reward -= 150 # Большой штраф за проигрыш с низкими плитками
     
     return reward
 
 # --- Параметры обучения ---
-NUM_EPISODES = 500 
-MAX_STEPS_PER_EPISODE = 750
+NUM_EPISODES = 2500 
+MAX_STEPS_PER_EPISODE = 1000
 
 # --- Инициализация ---
 game_env_init = Game() 
@@ -83,9 +83,9 @@ action_size = 4
 agent = DQNAgent(state_size, action_size, 
                  replay_buffer_size=20000, 
                  batch_size=128,          
-                 learning_rate=0.0005,    
+                 learning_rate=0.00025,
                  gamma=0.99,
-                 epsilon_decay=0.99995) # Значительно замедленное затухание эпсилон
+                 epsilon_decay=0.99995)
 
 scores_history = []
 avg_scores_history = []
