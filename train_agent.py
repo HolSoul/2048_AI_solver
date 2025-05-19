@@ -29,7 +29,7 @@ def calculate_reward(score_before, score_after, board_changed_by_move, game_over
 
 # --- Параметры обучения ---
 NUM_EPISODES = 2000 
-MAX_STEPS_PER_EPISODE = 1000 
+MAX_STEPS_PER_EPISODE = 5000 
 # TARGET_UPDATE_FREQUENCY = 10 # Мягкое обновление используется в replay
 
 # --- Инициализация ---
