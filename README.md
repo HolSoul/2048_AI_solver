@@ -83,7 +83,7 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone <[URL_репозитория](https://github.com/HolSoul/2048_AI_solver)>
+    git clone https://github.com/HolSoul/2048_AI_solver
     cd 2048_AI_solver
     ```
 
