@@ -90,7 +90,7 @@ active_animations = [] # Теперь будет содержать более �
 ai_agent = None
 ai_active = False
 ai_model_loaded = False
-DEFAULT_MODEL_FILENAME = "dqn_2048_pytorch_ep1600.pth" # Или конкретный файл, например dqn_2048_pytorch_ep2000.pth
+DEFAULT_MODEL_FILENAME = "dqn_2048_pytorch_ep500.pth" # Или конкретный файл, например dqn_2048_pytorch_ep2000.pth
 AI_MOVE_DELAY_MS = 100 # Задержка между ходами ИИ в миллисекундах (0.5 секунды)
 
 def initialize_ai_agent(filename=DEFAULT_MODEL_FILENAME):
