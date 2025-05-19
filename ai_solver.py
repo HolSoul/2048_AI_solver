@@ -161,33 +161,25 @@ if __name__ == '__main__':
     else:
         print("Невозможно запустить пример DQNAgent, так как PyTorch не найден.")
 
-# Удаляем старый AISolver, если он был ниже, чтобы избежать конфликтов имен или путаницы
-# class AISolver:
-#     def __init__(self, game):
-#         self.game = game
-#     def get_best_move(self):
-#         import random
-#         return random.choice([0, 1, 2, 3])
+# # Пример использования
+# if __name__ == '__main__':
+#     if torch is not None:
+#         state_size_example = 16 # Например, доска 4x4, представленная как плоский вектор
+#         action_size_example = 4   # 4 возможных хода
+        
+#         agent = DQNAgent(state_size_example, action_size_example)
+        
+#         # Пример одного шага взаимодействия
+#         example_state = np.random.rand(state_size_example) # Случайное состояние
+#         action_chosen = agent.act(example_state)
+#         print(f"Состояние: {example_state}")
+#         print(f"Выбранное действие: {action_chosen}")
+        
+#         # Пример сохранения/загрузки (создаст файл в текущей директории)
+#         # agent.save("./dqn_2048_test.weights.h5")
+#         # agent.load("./dqn_2048_test.weights.h5")
 
-# Пример использования (пока не интегрировано с игрой)
-if __name__ == '__main__':
-    if torch is not None:
-        state_size_example = 16 # Например, доска 4x4, представленная как плоский вектор
-        action_size_example = 4   # 4 возможных хода
-        
-        agent = DQNAgent(state_size_example, action_size_example)
-        
-        # Пример одного шага взаимодействия
-        example_state = np.random.rand(state_size_example) # Случайное состояние
-        action_chosen = agent.act(example_state)
-        print(f"Состояние: {example_state}")
-        print(f"Выбранное действие: {action_chosen}")
-        
-        # Пример сохранения/загрузки (создаст файл в текущей директории)
-        # agent.save("./dqn_2048_test.weights.h5")
-        # agent.load("./dqn_2048_test.weights.h5")
-
-        # Дальнейшие шаги: интеграция с game.py, цикл обучения.
-        print("DQNAgent создан. Для использования нужна интеграция с игрой и цикл обучения.")
-    else:
-        print("Невозможно запустить пример DQNAgent, так как PyTorch не найден.") 
+#         # Дальнейшие шаги: интеграция с game.py, цикл обучения.
+#         print("DQNAgent создан. Для использования нужна интеграция с игрой и цикл обучения.")
+#     else:
+#         print("Невозможно запустить пример DQNAgent, так как PyTorch не найден.") 
