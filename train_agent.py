@@ -87,101 +87,42 @@ def count_empty_cells(board_raw):
 def calculate_reward(score_before, score_after, 
                      board_before_raw, board_after_raw,
                      board_changed_by_move, game_over_flag,
-                     action_taken # Добавляем совершенное действие
+                     action_taken 
                      ):
-    reward = 0
-    # Веса для различных компонентов награды
-    W_SCORE_INCREASE = 0.05 # Уменьшаем вес, т.к. стратегические бонусы важнее
-    W_MAX_TILE_INCREASE_LOG = 15
-    W_MAX_TILE_APPEAR_LOG = 3
-    W_EMPTY_CELLS = 0.1 # Уменьшаем вес
-    W_USELESS_MOVE_PENALTY = 10 # Увеличиваем
-    W_GAME_OVER_BASE_PENALTY = 200 
-    W_GAME_OVER_REACH_2048_REWARD = 300
-    
-    W_MAX_IN_CORNER = 50  # Значительный бонус за макс. плитку в углу
-    W_LOST_MAX_FROM_CORNER = -70 # Значительный штраф за потерю макс. плитки из угла
-    W_ROW_MONOTONICITY = 1.5 # Вес для монотонности целевой строки
-    W_COL_MONOTONICITY = 1.0 # Вес для монотонности целевого столбца
-    W_BAD_ACTION_PENALTY = -15 # Штраф за ход ВВЕРХ, если он не стратегический
+    reward = 0.0
 
-    max_tile_before, loc_before = get_max_tile_value_and_loc(board_before_raw)
-    max_tile_after, loc_after = get_max_tile_value_and_loc(board_after_raw)
+    max_tile_before, _ = get_max_tile_value_and_loc(board_before_raw)
+    max_tile_after, _ = get_max_tile_value_and_loc(board_after_raw)
 
-    # 1. Награда за увеличение счета
-    score_increase = score_after - score_before
-    reward += score_increase * W_SCORE_INCREASE
+    REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER = 10.0
+    PENALTY_GAME_OVER = -100.0 
+    REWARD_WIN_2048 = 200.0 # Награда за достижение 2048
 
-    # 2. Награда, связанная с максимальной плиткой (значение)
-    if max_tile_after > max_tile_before and max_tile_before > 0:
-        reward += (np.log2(max_tile_after + 1e-6) - np.log2(max_tile_before + 1e-6)) * W_MAX_TILE_INCREASE_LOG
-    elif max_tile_after > 0 and max_tile_before == 0:
-        reward += np.log2(max_tile_after + 1e-6) * W_MAX_TILE_APPEAR_LOG
-    
-    # Небольшая награда за сам факт наличия высокой плитки (состояние) - можно убрать или уменьшить, т.к. есть бонус за угол
-    # if max_tile_after > 0:
-    #      reward += np.log2(max_tile_after + 1e-6) * 0.2 
-
-    # 3. Стратегические бонусы/штрафы (угол и монотонность)
-    # 3.1. Максимальная плитка в целевом углу
-    if loc_after == TARGET_CORNER_RC and max_tile_after > 0:
-        reward += W_MAX_IN_CORNER * np.log2(max_tile_after + 1e-6) # Бонус зависит от величины плитки в углу
-    elif loc_before == TARGET_CORNER_RC and loc_after != TARGET_CORNER_RC and max_tile_before > 0:
-        # Штраф, если максимальная плитка ушла из угла
-        # Убедимся, что это действительно та же самая максимальная плитка или ее эквивалент
-        if max_tile_before >= np.max(board_after_raw) or max_tile_before == max_tile_after : # Если макс плитка не увеличилась или осталась той же, но сместилась
-             reward += W_LOST_MAX_FROM_CORNER * np.log2(max_tile_before + 1e-6)
-
-    # 3.2. Монотонность целевой строки (где должен быть угол)
-    target_row_after = board_after_raw[TARGET_CORNER_RC[0]]
-    reward += calculate_line_monotonicity_and_smoothness(target_row_after) * W_ROW_MONOTONICITY
-    
-    # 3.3. Монотонность целевого столбца
-    target_col_array_after = [board_after_raw[r][TARGET_CORNER_RC[1]] for r in range(len(board_after_raw))]
-    reward += calculate_line_monotonicity_and_smoothness(target_col_array_after) * W_COL_MONOTONICITY
-
-    # 4. Бонус за пустые клетки
-    empty_cells_after = count_empty_cells(board_after_raw)
-    reward += empty_cells_after * W_EMPTY_CELLS
-
-    # 5. Штрафы за ходы и состояние игры
-    # 5.1. Штраф за "плохой" ход (например, ВВЕРХ - action 0)
-    # Ход вверх (0) часто плох для стратегии с нижним углом
-    # Штрафуем, только если ход не привел к позитивным изменениям (увеличению макс. плитки или улучшению монотонности)
-    strategic_improvement_by_up_move = False
-    if action_taken == 0: # Предполагаем 0 - UP
-        if max_tile_after > max_tile_before : strategic_improvement_by_up_move = True
-        # Можно добавить более сложную проверку, не ухудшил ли ход монотонность
-        # row_mono_before = calculate_line_monotonicity_and_smoothness(board_before_raw[TARGET_CORNER_RC[0]])
-        # if calculate_line_monotonicity_and_smoothness(target_row_after) > row_mono_before : strategic_improvement_by_up_move = True
-        
-        if not strategic_improvement_by_up_move and loc_after != TARGET_CORNER_RC : # Если ход вверх не улучшил ситуацию и сместил макс плитку
-             reward += W_BAD_ACTION_PENALTY
-
-    # 5.2. Штраф за бесполезный ход (не изменил доску)
-    if not board_changed_by_move and not game_over_flag:
-        reward -= W_USELESS_MOVE_PENALTY
-    
-    # 5.3. Штраф/награда за окончание игры
-    if game_over_flag:
-        if max_tile_after >= 2048:
-            reward += W_GAME_OVER_REACH_2048_REWARD
-        else:
-            # Штраф зависит от максимальной достигнутой плитки
-            penalty = W_GAME_OVER_BASE_PENALTY
-            if max_tile_after >= 128: penalty *= 0.25
-            elif max_tile_after >= 64: penalty *= 0.5
-            elif max_tile_after >= 32: penalty *= 0.75
-            reward -= penalty
+    # 1. Награда за увеличение максимальной плитки на доске
+    if max_tile_after > max_tile_before and max_tile_after > 0:
+        # Награда пропорциональна логарифму новой максимальной плитки.
+        # Это дает большие награды за достижение более высоких плиток.
+        # Например, если новая макс. плитка 4 (log2(4)=2), награда +20.
+        # Если новая макс. плитка 32 (log2(32)=5), награда +50.
+        # Если новая макс. плитка 2048 (log2(2048)=11), награда +110.
+        reward += np.log2(max_tile_after) * REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER
             
-            # Дополнительный большой штраф, если проиграли с макс. плиткой не в углу
-            if loc_after != TARGET_CORNER_RC and max_tile_after > 0:
-                reward -= W_MAX_IN_CORNER # Используем как штраф
+    # 2. Штраф/награда за окончание игры
+    if game_over_flag:
+        if max_tile_after >= 2048: # Условие победы
+            reward += REWARD_WIN_2048
+        else:
+            # Штраф за проигрыш игры
+            reward += PENALTY_GAME_OVER
+            # Можно добавить более сложный штраф, зависящий от достигнутой плитки,
+            # но пока ограничимся фиксированным значением для простоты.
 
+    # Параметры (score_before, score_after, board_changed_by_move, action_taken)
+    # пока не используются для упрощения, но остаются для возможного будущего расширения.
     return reward
 
 # --- Параметры обучения ---
-NUM_EPISODES = 2500 
+NUM_EPISODES = 3000 
 MAX_STEPS_PER_EPISODE = 1000
 
 # --- Инициализация ---
@@ -194,7 +135,7 @@ agent = DQNAgent(state_size, action_size,
                  batch_size=128,          
                  learning_rate=0.00025,
                  gamma=0.99,
-                 epsilon_decay=0.99995)
+                 epsilon_decay=0.99999)
 
 scores_history = []
 avg_scores_history = []
