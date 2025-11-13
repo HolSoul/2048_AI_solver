@@ -1,3 +1,7 @@
 /.venv
 /venv
 /__pycache__
+/debug
+/models_pytorch
+*.zip
+/models_pytorch_run*

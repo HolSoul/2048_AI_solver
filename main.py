@@ -5,15 +5,207 @@ import numpy as np # Для get_state
 from game import Game
 # from ai_solver import AISolver # Старый placeholder, если был
 from ai_solver import DQNAgent, DEVICE, QNetwork # Наш агент и устройство, импортируем также QNetwork и torch из ai_solver, если они там
+import datetime # Для именования лог файлов
 
 # Попытка импортировать torch глобально в main.py для проверки в initialize_ai_agent
-if 'torch' not in globals(): # Если еще не импортирован (например, из ai_solver)
+if 'torch' not in globals():
     try:
         import torch
         print("(main.py) PyTorch импортирован для проверки.")
     except ImportError:
         print("(main.py) PyTorch не найден. ИИ не будет доступен.")
         torch = None 
+
+# --- Функции, скопированные/адаптированные из train_agent.py для отладки вознаграждений ---
+TARGET_CORNER_RC = (3, 0) # Убедитесь, что это тот же угол, что и при обучении
+
+def get_max_tile_value_and_loc(board_raw): # Копия из train_agent.py
+    max_val = 0 
+    loc = (-1, -1) 
+    if not board_raw: 
+        return 0, (-1,-1)
+    board_np_flat = np.array(board_raw).flatten()
+    if not np.any(board_np_flat): 
+        return 0, (-1,-1)
+    for r_idx, row in enumerate(board_raw):
+        for c_idx, val_in_row in enumerate(row): # val переименовано в val_in_row
+            if val_in_row > max_val:
+                max_val = val_in_row
+                loc = (r_idx, c_idx)
+    if max_val == 0: 
+        return 0, (-1,-1)
+    return max_val, loc
+
+def count_empty_cells(board_raw): # Копия из train_agent.py
+    return np.sum(np.array(board_raw) == 0)
+
+def calculate_line_monotonicity_and_smoothness(line_array_raw): # Копия из train_agent.py
+    line_array = np.array(line_array_raw) 
+    score = 0.0 
+    is_monotonic_decreasing = True
+    for i in range(len(line_array) - 1):
+        if line_array[i] != 0 and line_array[i+1] != 0 and line_array[i] < line_array[i+1]:
+            is_monotonic_decreasing = False
+            score -= (np.log2(line_array[i+1] + 1e-9) - np.log2(line_array[i] + 1e-9)) * 1.5 
+    if is_monotonic_decreasing:
+        score += 2.0 
+    for i in range(len(line_array) - 1):
+        val1 = line_array[i]
+        val2 = line_array[i+1]
+        if val1 > 0 and val2 > 0: 
+            if val1 >= val2: 
+                score += np.log2(val1 + 1e-9) * 0.25 
+                if val1 == val2 * 2: 
+                    score += 1.0
+        elif val1 > 0 and val2 == 0: 
+            score += 0.5
+    empty_at_end = 0
+    for x_val in reversed(line_array): 
+        if x_val == 0:
+            empty_at_end +=1
+        else:
+            break
+    score += empty_at_end * 0.25
+    return score
+
+# Заменяем calculate_reward_for_debug на полную копию из train_agent.py
+def calculate_reward_for_debug(score_before, score_after, 
+                               board_before_raw, board_after_raw,
+                               board_changed_by_move, game_over_flag):
+    reward = 0.0
+
+    max_tile_before, loc_max_tile_before = get_max_tile_value_and_loc(board_before_raw)
+    max_tile_after, loc_max_tile_after = get_max_tile_value_and_loc(board_after_raw)
+    num_empty_after = count_empty_cells(board_after_raw)
+    board_np_after = np.array(board_after_raw)
+    board_np_before = np.array(board_before_raw) 
+
+    # --- Константы для наград и штрафов (должны быть идентичны train_agent.py) ---
+    REWARD_SCORE_INCREASE_MULTIPLIER = 0.01  
+    REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER = 20.0 
+    PENALTY_GAME_OVER = -300.0 
+    REWARD_WIN_2048 = 1500.0   
+    PENALTY_INVALID_MOVE = -50.0 
+    REWARD_EMPTY_CELLS_MULTIPLIER = 0.5  
+    
+    REWARD_MAX_TILE_IN_CORNER = 80.0  
+    WEIGHT_MAX_TILE_CORNER_LOG = True 
+    PENALTY_MAX_TILE_LEFT_CORNER = -70.0 
+    REWARD_LOCKED_CORNER_BONUS = 20.0    
+    WEIGHT_LOCKED_CORNER_LOG = True    
+
+    REWARD_MONOTONICITY_OVERALL_WEIGHT = 0.3 
+    REWARD_SMOOTHNESS_WEIGHT = 0.1 
+    REWARD_POTENTIAL_MERGES_MULTIPLIER = 0.5 
+    
+    epsilon_log = 1e-9 
+
+    if not board_changed_by_move and not game_over_flag:
+        reward += PENALTY_INVALID_MOVE
+        return np.clip(reward, -400.0, 1700.0) 
+
+    if score_after > score_before:
+        reward += (score_after - score_before) * REWARD_SCORE_INCREASE_MULTIPLIER
+
+    if max_tile_after > max_tile_before and max_tile_after > 0:
+        increase_bonus = np.log2(max_tile_after + epsilon_log) * REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER
+        if max_tile_after > 2 and (max_tile_after & (max_tile_after - 1) == 0): 
+             increase_bonus += np.log2(max_tile_after + epsilon_log) * (REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER / 1.5) 
+        reward += increase_bonus
+            
+    reward += num_empty_after * REWARD_EMPTY_CELLS_MULTIPLIER
+
+    current_target_corner = TARGET_CORNER_RC 
+    if loc_max_tile_after == current_target_corner and max_tile_after > 0:
+        corner_bonus = REWARD_MAX_TILE_IN_CORNER
+        if WEIGHT_MAX_TILE_CORNER_LOG:
+            corner_bonus *= np.log2(max_tile_after + epsilon_log) 
+        reward += corner_bonus
+
+        is_locked = True
+        if current_target_corner[1] + 1 < board_np_after.shape[1]:
+            neighbor_right = board_np_after[current_target_corner[0], current_target_corner[1] + 1]
+            if not (neighbor_right == 0 or neighbor_right >= max_tile_after): 
+                is_locked = False
+        if current_target_corner[0] - 1 >= 0:
+            neighbor_up = board_np_after[current_target_corner[0] - 1, current_target_corner[1]]
+            if not (neighbor_up == 0 or neighbor_up >= max_tile_after): 
+                is_locked = False
+        
+        if is_locked:
+            locked_bonus = REWARD_LOCKED_CORNER_BONUS
+            if WEIGHT_LOCKED_CORNER_LOG:
+                locked_bonus *= np.log2(max_tile_after + epsilon_log)
+            reward += locked_bonus
+
+    if loc_max_tile_before == current_target_corner and max_tile_before > 0: 
+        tile_in_corner_after = board_np_after[current_target_corner[0], current_target_corner[1]]
+        if loc_max_tile_after != current_target_corner or \
+           (loc_max_tile_after == current_target_corner and max_tile_after < max_tile_before) or \
+           tile_in_corner_after < max_tile_before:
+            penalty_val = PENALTY_MAX_TILE_LEFT_CORNER
+            reward += penalty_val
+    
+    grid_score = 0.0
+    for r in range(board_np_after.shape[0]):
+        row_data = board_np_after[r, :] # Renamed variable to avoid conflict
+        weight = 1.0 if r == current_target_corner[0] else 0.7 
+        grid_score += calculate_line_monotonicity_and_smoothness(row_data) * weight
+
+    for c_col_idx in range(board_np_after.shape[1]): 
+        col_data = board_np_after[:, c_col_idx] # Renamed variable to avoid conflict
+        weight = 1.0 if c_col_idx == current_target_corner[1] else 0.7
+        if current_target_corner[0] == 0: 
+            grid_score += calculate_line_monotonicity_and_smoothness(col_data) * weight
+        elif current_target_corner[0] == board_np_after.shape[0] - 1: 
+            grid_score += calculate_line_monotonicity_and_smoothness(col_data[::-1]) * weight
+    reward += grid_score * REWARD_MONOTONICITY_OVERALL_WEIGHT
+
+    smoothness_penalty = 0.0
+    for r_idx_smooth, row_smooth in enumerate(board_np_after): # Iterate directly over rows for clarity
+        for c_idx_smooth, current_val_smooth in enumerate(row_smooth): # current_val renamed
+            if current_val_smooth == 0: continue
+            if c_idx_smooth + 1 < board_np_after.shape[1]:
+                right_val = board_np_after[r_idx_smooth, c_idx_smooth + 1]
+                if right_val != 0 and abs(np.log2(current_val_smooth + epsilon_log) - np.log2(right_val + epsilon_log)) > 1.0: 
+                    smoothness_penalty -= abs(np.log2(current_val_smooth + epsilon_log) - np.log2(right_val + epsilon_log)) 
+            if r_idx_smooth + 1 < board_np_after.shape[0]:
+                down_val = board_np_after[r_idx_smooth + 1, c_idx_smooth]
+                if down_val != 0 and abs(np.log2(current_val_smooth + epsilon_log) - np.log2(down_val + epsilon_log)) > 1.0:
+                    smoothness_penalty -= abs(np.log2(current_val_smooth + epsilon_log) - np.log2(down_val + epsilon_log))
+    reward += smoothness_penalty * REWARD_SMOOTHNESS_WEIGHT
+
+    potential_merges = 0
+    for r_idx_pm in range(board_np_after.shape[0]):
+        for c_idx_pm in range(board_np_after.shape[1]): 
+            current_val_pm_merge = board_np_after[r_idx_pm, c_idx_pm] # Renamed variable
+            if current_val_pm_merge == 0: continue
+            if c_idx_pm + 1 < board_np_after.shape[1]:
+                if board_np_after[r_idx_pm, c_idx_pm + 1] == current_val_pm_merge:
+                    potential_merges += 1
+            if r_idx_pm + 1 < board_np_after.shape[0]:
+                if board_np_after[r_idx_pm + 1, c_idx_pm] == current_val_pm_merge:
+                    potential_merges += 1
+    reward += potential_merges * REWARD_POTENTIAL_MERGES_MULTIPLIER
+
+    if game_over_flag:
+        if max_tile_after >= 2048:
+            reward += REWARD_WIN_2048
+        else:
+            penalty_game_over_scaled = PENALTY_GAME_OVER
+            if max_tile_after > 0: 
+                 penalty_scale_factor = (np.log2(2048.0 + epsilon_log) - np.log2(max_tile_after + epsilon_log)) / (np.log2(2048.0 + epsilon_log) - np.log2(2.0 + epsilon_log) + epsilon_log)
+                 penalty_game_over_scaled *= penalty_scale_factor
+            else: 
+                 penalty_game_over_scaled = PENALTY_GAME_OVER * 1.2 
+
+            reward += penalty_game_over_scaled
+            if max_tile_after < 32 : 
+                reward -= 100.0 
+            elif max_tile_after < 128: 
+                reward -= 50.0
+
+    return np.clip(reward, -400.0, 1700.0)
 
 # Копируем get_state из train_agent.py (или можно импортировать, если вынести в утилиты)
 def get_state(board):
@@ -90,8 +282,8 @@ active_animations = [] # Теперь будет содержать более �
 ai_agent = None
 ai_active = False
 ai_model_loaded = False
-DEFAULT_MODEL_FILENAME = "dqn_2048_pytorch_ep1000.pth" # Или конкретный файл, например dqn_2048_pytorch_ep2000.pth
-AI_MOVE_DELAY_MS = 10 # Задержка между ходами ИИ в миллисекундах (0.5 секунды)
+DEFAULT_MODEL_FILENAME = "dqn_2048_pytorch_best_avg_score.pth" # Или конкретный файл, например dqn_2048_pytorch_ep2000.pth
+AI_MOVE_DELAY_MS = 100 # Задержка между ходами ИИ в миллисекундах
 
 def initialize_ai_agent(filename=DEFAULT_MODEL_FILENAME):
     global ai_agent, ai_model_loaded, torch # Указываем, что torch - глобальная переменная
@@ -375,84 +567,178 @@ def main():
     running = True
     game_over_state = False
     ai_last_move_time = 0 # Таймер для задержки ходов ИИ
+    log_file = None # Инициализируем как None
+    debug_folder = "debug"
+    if not os.path.exists(debug_folder):
+        os.makedirs(debug_folder)
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = os.path.join(debug_folder, f"ai_debug_log_{timestamp}.txt")
+    
+    try:
+        log_file = open(log_filename, 'w', encoding='utf-8')
+        print(f"Отладочный лог будет сохранен в: {log_filename}")
 
-    while running:
-        current_time = pygame.time.get_ticks()
-        human_made_move_this_frame = False
+        def log_debug_info(message):
+            print(message)
+            if log_file:
+                log_file.write(message + '\n')
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+        while running:
+            current_time = pygame.time.get_ticks()
+            human_made_move_this_frame = False
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                    # Если это событие QUIT, выходим из цикла по событиям и переходим к следующей итерации главного цикла
+                    # или позволяем finally блоку закрыть файл лога, если running стало False.
+                    # Нет нужды обрабатывать QUIT дальше.
             
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_q:
-                    running = False 
-                if event.key == pygame.K_m:
-                    ai_active = not ai_active
-                    if ai_active and not ai_model_loaded:
-                        print("Активация ИИ. Загрузка модели...")
-                        initialize_ai_agent() 
-                        if not ai_model_loaded:
-                            print("Не удалось загрузить модель ИИ.")
-                            ai_active = False
-                        else:
-                            ai_last_move_time = current_time # Сброс таймера при активации ИИ, чтобы он не ходил сразу
-                    else:
-                        print(f"ИИ {'активирован' if ai_active else 'деактивирован'}.")
-                
-                if game_over_state:
-                    if event.key == pygame.K_r:
-                        game = Game()
-                        game_over_state = False
-                        ai_active = False 
-                        ai_model_loaded = False 
-                        active_animations.clear()
-                        ai_last_move_time = 0 # Сброс таймера
-                elif not ai_active and not active_animations: 
-                    animation_events_from_game = []
-                    if event.key == pygame.K_UP: animation_events_from_game = game.move(0)
-                    elif event.key == pygame.K_DOWN: animation_events_from_game = game.move(1)
-                    elif event.key == pygame.K_LEFT: animation_events_from_game = game.move(2)
-                    elif event.key == pygame.K_RIGHT: animation_events_from_game = game.move(3)
+                if event.type == pygame.KEYDOWN:
+                    # Сначала обработаем общие клавиши управления (Q, M)
+                    if event.key == pygame.K_q:
+                        running = False
+                        # Прерываем обработку текущего события, так как это выход
+                        continue 
                     
-                    if animation_events_from_game:
-                        human_made_move_this_frame = True
-                        for ev in animation_events_from_game:
-                            add_animation_from_event(ev)
-                    if game.is_game_over(): game_over_state = True
+                    if event.key == pygame.K_m:
+                        ai_active = not ai_active
+                        if ai_active and not ai_model_loaded:
+                            log_debug_info("Активация ИИ. Загрузка модели...")
+                            initialize_ai_agent() 
+                            if not ai_model_loaded:
+                                log_debug_info("Не удалось загрузить модель ИИ.")
+                                ai_active = False
+                            else:
+                                ai_last_move_time = current_time 
+                        else:
+                            log_debug_info(f"ИИ {'активирован' if ai_active else 'деактивирован'}.")
+                        # Прерываем обработку текущего события, так как это переключение режима
+                        continue
+
+                    # Теперь обрабатываем клавиши, зависящие от состояния игры
+                    if game_over_state:
+                        if event.key == pygame.K_r:
+                            game = Game()
+                            game_over_state = False
+                            # При перезапуске стоит сбросить состояние ИИ, если он был активен
+                            # ai_active = False # Решите, нужно ли сбрасывать ai_active при рестарте
+                            # ai_model_loaded = False # Возможно, модель не нужно перезагружать
+                            active_animations.clear()
+                            ai_last_move_time = 0 
+                            log_debug_info("Игра перезапущена.")
+                    else: # Не game_over_state
+                        # Ходы человека обрабатываются только если:
+                        # - не конец игры
+                        # - ИИ не активен
+                        # - нет активных анимаций
+                        if not ai_active and not active_animations:
+                            animation_events_from_game = []
+                            moved = False
+                            if event.key == pygame.K_UP:
+                                animation_events_from_game = game.move(0)
+                                moved = True
+                            elif event.key == pygame.K_DOWN:
+                                animation_events_from_game = game.move(1)
+                                moved = True
+                            elif event.key == pygame.K_LEFT:
+                                animation_events_from_game = game.move(2)
+                                moved = True
+                            elif event.key == pygame.K_RIGHT:
+                                animation_events_from_game = game.move(3)
+                                moved = True
+                            
+                            if moved and animation_events_from_game: # Убедимся, что ход был и он что-то изменил
+                                human_made_move_this_frame = True
+                                for ev in animation_events_from_game:
+                                    add_animation_from_event(ev)
+                            
+                            if moved and game.is_game_over(): # Проверяем game over только если был сделан ход
+                                game_over_state = True
+                                log_debug_info("Game Over (после хода человека).")
+                # Конец блока if event.type == pygame.KEYDOWN
         
-        # --- Логика хода ИИ --- 
-        if ai_active and ai_model_loaded and not game_over_state and not active_animations and not human_made_move_this_frame:
-            if current_time - ai_last_move_time >= AI_MOVE_DELAY_MS:
-                current_game_state_for_ai = get_state(game.board)
-                if ai_agent: 
-                    ai_action = ai_agent.act(current_game_state_for_ai)
-                    animation_events_from_game = game.move(ai_action)
-                    if animation_events_from_game:
-                        for ev in animation_events_from_game:
-                            add_animation_from_event(ev)
-                    # Обновляем таймер после КАЖДОЙ попытки хода ИИ, даже если ход ничего не изменил
-                    # чтобы была задержка перед следующей попыткой.
-                    ai_last_move_time = current_time 
-                    if game.is_game_over(): game_over_state = True
-        
-        # Обновление анимаций
-        if active_animations:
-            for anim in list(active_animations): # Итерация по копии списка
-                elapsed_time = current_time - anim['start_time']
-                anim['progress'] = min(elapsed_time / ANIMATION_DURATION_MS, 1.0)
-                if anim['progress'] >= 1.0:
-                    active_animations.remove(anim)
+            # --- Логика хода ИИ --- 
+            if ai_active and ai_model_loaded and not game_over_state and not active_animations and not human_made_move_this_frame:
+                if current_time - ai_last_move_time >= AI_MOVE_DELAY_MS:
+                    current_game_state_for_ai = get_state(game.board)
+                    
+                    # --- Отладочный вывод перед ходом ИИ ---
+                    log_debug_info("\n--- AI Making a Move ---")
+                    log_debug_info("Board BEFORE AI move:")
+                    for row_idx, game_row in enumerate(game.board): # Используем game_row вместо row
+                        log_debug_info(str(game_row)) # Преобразуем в строку для записи в файл
+                    log_debug_info(f"Score BEFORE AI move: {game.score}")
+                    # --- Конец отладочного вывода ---
 
-        if not game_over_state:
-            draw_board(game.board, game.score)
-        else:
-            draw_board(game.board, game.score) # Показываем финальную доску
-            draw_game_over()
+                    # Сохраняем состояние ДО хода для расчета вознаграждения
+                    board_before_ai_move_raw = [list(r) for r in game.board] # Глубокая копия
+                    score_before_ai_move = game.score
 
-        pygame.display.flip() # Обновляем весь экран
-        clock.tick(60) 
+                    if ai_agent: 
+                        ai_action = ai_agent.act(current_game_state_for_ai)
+                        
+                        # --- Отладочный вывод: выбранное действие ---
+                        action_map = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"}
+                        log_debug_info(f"AI Action Chosen: {ai_action} ({action_map.get(ai_action, 'UNKNOWN')})")
+                        # --- Конец отладочного вывода ---
 
+                        animation_events_from_game = game.move(ai_action)
+                        
+                        board_changed_by_ai_move = bool(animation_events_from_game)
+                        game_over_after_ai_move = game.is_game_over()
+                        score_after_ai_move = game.score
+                        board_after_ai_move_raw = game.board # Это уже состояние ПОСЛЕ хода
+
+                        # Рассчитываем и выводим вознаграждение за этот ход
+                        debug_reward = calculate_reward_for_debug(
+                            score_before_ai_move, score_after_ai_move,
+                            board_before_ai_move_raw, board_after_ai_move_raw,
+                            board_changed_by_ai_move, game_over_after_ai_move
+                        )
+                        log_debug_info(f"Board AFTER AI move (Score: {score_after_ai_move}):")
+                        for row_idx, game_row in enumerate(board_after_ai_move_raw): # game_row вместо row
+                            log_debug_info(str(game_row)) # Преобразуем в строку для записи в файл
+                        log_debug_info(f"DEBUG REWARD for AI's move: {debug_reward:.4f}")
+                        if board_changed_by_ai_move:
+                            log_debug_info("Board was changed by AI move.")
+                        else:
+                            log_debug_info("Board was NOT changed by AI move.")
+                        if game_over_after_ai_move:
+                            log_debug_info("GAME OVER after AI move.")
+                        log_debug_info("--- End AI Move Debug ---")
+                        # --- Конец отладочного вывода ---
+
+
+                        if animation_events_from_game:
+                            for ev in animation_events_from_game:
+                                add_animation_from_event(ev)
+                        # Обновляем таймер после КАЖДОЙ попытки хода ИИ, даже если ход ничего не изменил
+                        # чтобы была задержка перед следующей попыткой.
+                        ai_last_move_time = current_time 
+                        if game.is_game_over(): game_over_state = True
+            
+            # Обновление анимаций
+            if active_animations:
+                for anim in list(active_animations): # Итерация по копии списка
+                    elapsed_time = current_time - anim['start_time']
+                    anim['progress'] = min(elapsed_time / ANIMATION_DURATION_MS, 1.0)
+                    if anim['progress'] >= 1.0:
+                        active_animations.remove(anim)
+
+            if not game_over_state:
+                draw_board(game.board, game.score)
+            else:
+                draw_board(game.board, game.score) # Показываем финальную доску
+                draw_game_over()
+
+            pygame.display.flip() # Обновляем весь экран
+            clock.tick(60) 
+    finally:
+        if log_file:
+            log_debug_info(f"Завершение игры. Лог сохранен в {log_filename}")
+            log_file.close()
     pygame.quit()
     sys.exit()
 

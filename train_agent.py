@@ -5,34 +5,47 @@ import matplotlib.pyplot as plt # Для графиков обучения
 
 # --- Вспомогательные функции для стратегии "угол" ---
 def get_max_tile_value_and_loc(board_raw):
-    max_val = 0
+    max_val = 0 # Инициализируем max_val
     loc = (-1, -1) # По умолчанию, если доска пуста
-    if not board_raw or not any(np.array(board_raw).flatten()):
+    if not board_raw: # Проверка на пустой список board_raw
         return 0, (-1,-1)
         
+    board_np_flat = np.array(board_raw).flatten()
+    if not np.any(board_np_flat): # Проверка, что доска не состоит только из нулей
+        return 0, (-1,-1)
+
+    # Используем оригинальный итеративный способ для поиска максимальной плитки и ее локации,
+    # чтобы обеспечить консистентность с логикой выбора угла, если есть несколько одинаковых макс. плиток.
     for r_idx, row in enumerate(board_raw):
         for c_idx, val in enumerate(row):
             if val > max_val:
                 max_val = val
                 loc = (r_idx, c_idx)
+    
+    if max_val == 0: # Если после итерации максимальное значение все еще 0
+        return 0, (-1,-1)
     return max_val, loc
 
-def calculate_line_monotonicity_and_smoothness(line_array):
+
+def calculate_line_monotonicity_and_smoothness(line_array_raw):
     """Оценивает монотонность (невозрастание) и гладкость ряда.
        Более высокий балл лучше.
     """
-    score = 0
-    # 1. Бонус за монотонность (невозрастание)
-    is_monotonic = True
+    line_array = np.array(line_array_raw) # Убедимся, что это numpy array
+
+    score = 0.0 # Используем float для счета
+    # 1. Бонус за монотонность (невозрастание слева направо)
+    is_monotonic_decreasing = True
     for i in range(len(line_array) - 1):
-        # Штрафуем, если меньшая плитка стоит перед большей (кроме случая, когда меньшая - ноль)
-        if line_array[i] < line_array[i+1] and line_array[i] != 0:
-            is_monotonic = False
-            score -= (np.log2(line_array[i+1] + 1e-6) - np.log2(line_array[i] + 1e-6)) * 2 # Штраф пропорционален "нарушению"
+        # Штрафуем, если меньшая плитка стоит перед большей (обе не нулевые)
+        if line_array[i] != 0 and line_array[i+1] != 0 and line_array[i] < line_array[i+1]:
+            is_monotonic_decreasing = False
+            # Штраф пропорционален логарифмической разнице "нарушения"
+            score -= (np.log2(line_array[i+1] + 1e-9) - np.log2(line_array[i] + 1e-9)) * 1.5 
             # break # Можно раскомментировать для строгого штрафа за первое нарушение
     
-    if is_monotonic:
-        score += 5 # Базовый бонус за общую монотонность
+    if is_monotonic_decreasing:
+        score += 2.0 # Базовый бонус за общую монотонность
 
     # 2. Бонус за "гладкость" и правильный порядок смежных плиток
     for i in range(len(line_array) - 1):
@@ -40,26 +53,22 @@ def calculate_line_monotonicity_and_smoothness(line_array):
         val2 = line_array[i+1]
         if val1 > 0 and val2 > 0: # Обе плитки не нулевые
             if val1 >= val2: # Правильный порядок или равенство
-                # Бонус пропорционален логарифму большей плитки
-                score += np.log2(val1 + 1e-6) * 0.5 
-                # Небольшой бонус, если val2 является степенью val1/2 (например, 128, 64)
-                if val1 == val2 * 2:
-                    score += 2
-            else: # Неправильный порядок (меньшая перед большей)
-                # Штраф уже учтен выше, но можно добавить дополнительный
-                score -= np.log2(val2 + 1e-6) * 0.5 
-        elif val1 > 0 and val2 == 0: # Плитка, за которой следует пустое место - хорошо
-            score += 1
-        # Если val1 == 0 и val2 > 0 - это уже покрывается штрафом за немонотонность
+                score += np.log2(val1 + 1e-9) * 0.25 
+                if val1 == val2 * 2: # Например, 128, 64
+                    score += 1.0
+            # else: # Неправильный порядок (меньшая перед большей) - штраф уже учтен выше
+                # pass
+        elif val1 > 0 and val2 == 0: # Плитка, за которой следует пустое место - хорошо для края
+            score += 0.5
             
     # 3. Бонус за пустые клетки в конце ряда (если ряд заполняется слева направо)
     empty_at_end = 0
-    for x in reversed(line_array):
-        if x == 0:
+    for x_val in reversed(line_array): # Идем справа налево
+        if x_val == 0:
             empty_at_end +=1
         else:
             break
-    score += empty_at_end * 0.5
+    score += empty_at_end * 0.25
     
     return score
 
@@ -87,39 +96,178 @@ def count_empty_cells(board_raw):
 def calculate_reward(score_before, score_after, 
                      board_before_raw, board_after_raw,
                      board_changed_by_move, game_over_flag,
-                     action_taken 
+                     action_taken # action_taken пока не используется
                      ):
     reward = 0.0
 
-    max_tile_before, _ = get_max_tile_value_and_loc(board_before_raw)
-    max_tile_after, _ = get_max_tile_value_and_loc(board_after_raw)
+    max_tile_before, loc_max_tile_before = get_max_tile_value_and_loc(board_before_raw)
+    max_tile_after, loc_max_tile_after = get_max_tile_value_and_loc(board_after_raw)
+    num_empty_after = count_empty_cells(board_after_raw)
+    board_np_after = np.array(board_after_raw)
+    board_np_before = np.array(board_before_raw) # Понадобится для штрафа за уход из угла
 
-    REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER = 10.0
-    PENALTY_GAME_OVER = -100.0 
-    REWARD_WIN_2048 = 200.0 # Награда за достижение 2048
+    # --- Константы для наград и штрафов ---
+    REWARD_SCORE_INCREASE_MULTIPLIER = 0.01  # Небольшой бонус за очки
+    REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER = 20.0 # Значительно важнее достижение новых плиток
+    PENALTY_GAME_OVER = -300.0 # Существенный штраф за проигрыш (модифицируем масштабирование)
+    REWARD_WIN_2048 = 1500.0   # Большая награда за победу (увеличим)
+    PENALTY_INVALID_MOVE = -50.0 # Штраф за ход, не изменивший доску (если это не конец игры)
+    REWARD_EMPTY_CELLS_MULTIPLIER = 0.5  # За каждую пустую клетку (уменьшим)
+    
+    # Связанные с углом
+    REWARD_MAX_TILE_IN_CORNER = 80.0  # Бонус, если максимальная плитка в целевом углу (увеличим)
+    WEIGHT_MAX_TILE_CORNER_LOG = True # Умножать бонус на log2(max_tile_after)?
+    PENALTY_MAX_TILE_LEFT_CORNER = -70.0 # Штраф, если макс. плитка ушла из угла или угол ухудшился
+    REWARD_LOCKED_CORNER_BONUS = 20.0    # Бонус, если макс. плитка в углу "заперта" большими соседями
+    WEIGHT_LOCKED_CORNER_LOG = True    # Умножать бонус "запертости" на log2(max_tile_after)?
 
-    # 1. Награда за увеличение максимальной плитки на доске
+    # Эвристики доски
+    REWARD_MONOTONICITY_OVERALL_WEIGHT = 0.3 # Общий вес для монотонности/гладкости (увеличим)
+    REWARD_SMOOTHNESS_WEIGHT = 0.1 # Дополнительный вес для гладкости (соседние одинаковые или x, x/2)
+    REWARD_POTENTIAL_MERGES_MULTIPLIER = 0.5 # За каждую пару потенциальных слияний
+    
+    epsilon_log = 1e-9 # для стабильности логарифмов
+
+    # 0. Штраф за невалидный ход (если доска не изменилась и игра не окончена)
+    if not board_changed_by_move and not game_over_flag:
+        reward += PENALTY_INVALID_MOVE
+        return np.clip(reward, -400.0, 1700.0) # Обновим границы клиппинга
+
+    # 1. Награда за увеличение счета
+    if score_after > score_before:
+        reward += (score_after - score_before) * REWARD_SCORE_INCREASE_MULTIPLIER
+
+    # 2. Награда за увеличение максимальной плитки
     if max_tile_after > max_tile_before and max_tile_after > 0:
-        # Награда пропорциональна логарифму новой максимальной плитки.
-        # Это дает большие награды за достижение более высоких плиток.
-        # Например, если новая макс. плитка 4 (log2(4)=2), награда +20.
-        # Если новая макс. плитка 32 (log2(32)=5), награда +50.
-        # Если новая макс. плитка 2048 (log2(2048)=11), награда +110.
-        reward += np.log2(max_tile_after) * REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER
+        increase_bonus = np.log2(max_tile_after + epsilon_log) * REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER
+        if max_tile_after > 2 and (max_tile_after & (max_tile_after - 1) == 0): # Степень двойки
+             increase_bonus += np.log2(max_tile_after + epsilon_log) * (REWARD_MAX_TILE_INCREASE_LOG_MULTIPLIER / 1.5) # Усилим бонус за степень двойки
+        reward += increase_bonus
             
-    # 2. Штраф/награда за окончание игры
+    # 3. Награда за количество пустых клеток
+    reward += num_empty_after * REWARD_EMPTY_CELLS_MULTIPLIER
+
+    # 4. Логика УГЛА (TARGET_CORNER_RC)
+    current_target_corner = TARGET_CORNER_RC 
+    # 4a. Бонус за максимальную плитку в целевом углу
+    if loc_max_tile_after == current_target_corner and max_tile_after > 0:
+        corner_bonus = REWARD_MAX_TILE_IN_CORNER
+        if WEIGHT_MAX_TILE_CORNER_LOG:
+            corner_bonus *= np.log2(max_tile_after + epsilon_log) 
+        reward += corner_bonus
+
+        # 4b. Бонус за "запертую" максимальную плитку в углу
+        # (только если макс плитка уже в углу)
+        is_locked = True
+        # Предполагаем TARGET_CORNER_RC = (3,0) - левый нижний
+        # Сосед справа board_np_after[3,1], сосед сверху board_np_after[2,0]
+        # Проверяем правого соседа (если он существует)
+        if current_target_corner[1] + 1 < board_np_after.shape[1]:
+            neighbor_right = board_np_after[current_target_corner[0], current_target_corner[1] + 1]
+            if not (neighbor_right == 0 or neighbor_right >= max_tile_after): # Должен быть 0 или больше/равен
+                is_locked = False
+        # Проверяем верхнего соседа (если он существует)
+        if current_target_corner[0] - 1 >= 0:
+            neighbor_up = board_np_after[current_target_corner[0] - 1, current_target_corner[1]]
+            if not (neighbor_up == 0 or neighbor_up >= max_tile_after): # Должен быть 0 или больше/равен
+                is_locked = False
+        
+        if is_locked:
+            locked_bonus = REWARD_LOCKED_CORNER_BONUS
+            if WEIGHT_LOCKED_CORNER_LOG:
+                locked_bonus *= np.log2(max_tile_after + epsilon_log)
+            reward += locked_bonus
+
+    # 4c. Штраф, если максимальная плитка покинула угол или угол ухудшился
+    if loc_max_tile_before == current_target_corner and max_tile_before > 0: # Если раньше макс. была в углу
+        tile_in_corner_after = board_np_after[current_target_corner[0], current_target_corner[1]]
+        # Условие 1: Максимальная плитка вообще ушла из угла
+        # Условие 2: Максимальная плитка осталась та же, но ее позиция изменилась (т.е. она ушла из угла)
+        # Условие 3: В углу теперь плитка МЕНЬШЕ, чем была максимальная плитка до этого (которая была в углу)
+        if loc_max_tile_after != current_target_corner or \
+           (loc_max_tile_after == current_target_corner and max_tile_after < max_tile_before) or \
+           tile_in_corner_after < max_tile_before:
+            penalty_val = PENALTY_MAX_TILE_LEFT_CORNER
+            # Можно сделать штраф зависимым от величины ушедшей плитки
+            # penalty_val *= np.log2(max_tile_before + epsilon_log)
+            reward += penalty_val
+    
+    # 5. Эвристики монотонности и гладкости
+    grid_score = 0.0
+    # Монотонность вдоль строк (ожидаем убывание к правому краю для (3,0) или (0,0))
+    for r in range(board_np_after.shape[0]):
+        row = board_np_after[r, :]
+        # Дадим больший вес строке, где находится целевой угол
+        weight = 1.0 if r == current_target_corner[0] else 0.7 
+        grid_score += calculate_line_monotonicity_and_smoothness(row) * weight
+
+    # Монотонность вдоль столбцов
+    for c_col_idx in range(board_np_after.shape[1]): 
+        col = board_np_after[:, c_col_idx]
+        weight = 1.0 if c_col_idx == current_target_corner[1] else 0.7
+        if current_target_corner[0] == 0: # Если угол верхний 
+            grid_score += calculate_line_monotonicity_and_smoothness(col) * weight
+        elif current_target_corner[0] == board_np_after.shape[0] - 1: # Если угол нижний
+            grid_score += calculate_line_monotonicity_and_smoothness(col[::-1]) * weight
+    reward += grid_score * REWARD_MONOTONICITY_OVERALL_WEIGHT
+
+    # Дополнительная оценка гладкости (штраф за большие разрывы между соседними плитками)
+    smoothness_penalty = 0.0
+    for r_idx in range(board_np_after.shape[0]):
+        for c_idx_smooth in range(board_np_after.shape[1]): # переименовал 'c_idx' в 'c_idx_smooth'
+            current_val = board_np_after[r_idx,c_idx_smooth]
+            if current_val == 0: continue
+            
+            # Проверяем соседа справа
+            if c_idx_smooth + 1 < board_np_after.shape[1]:
+                right_val = board_np_after[r_idx, c_idx_smooth+1]
+                if right_val != 0 and abs(np.log2(current_val+epsilon_log) - np.log2(right_val+epsilon_log)) > 1.0: 
+                    smoothness_penalty -= abs(np.log2(current_val+epsilon_log) - np.log2(right_val+epsilon_log)) 
+            # Проверяем соседа снизу
+            if r_idx + 1 < board_np_after.shape[0]:
+                down_val = board_np_after[r_idx+1, c_idx_smooth]
+                if down_val != 0 and abs(np.log2(current_val+epsilon_log) - np.log2(down_val+epsilon_log)) > 1.0:
+                    smoothness_penalty -= abs(np.log2(current_val+epsilon_log) - np.log2(down_val+epsilon_log))
+    reward += smoothness_penalty * REWARD_SMOOTHNESS_WEIGHT
+
+    # 5b. Бонус за потенциальные слияния
+    potential_merges = 0
+    for r_idx in range(board_np_after.shape[0]):
+        for c_idx_pm in range(board_np_after.shape[1]): #pm для potential merge
+            current_val_pm = board_np_after[r_idx, c_idx_pm]
+            if current_val_pm == 0: continue
+            # Проверяем соседа справа
+            if c_idx_pm + 1 < board_np_after.shape[1]:
+                if board_np_after[r_idx, c_idx_pm + 1] == current_val_pm:
+                    potential_merges += 1
+            # Проверяем соседа снизу
+            if r_idx + 1 < board_np_after.shape[0]:
+                if board_np_after[r_idx + 1, c_idx_pm] == current_val_pm:
+                    potential_merges += 1
+    reward += potential_merges * REWARD_POTENTIAL_MERGES_MULTIPLIER
+
+    # 6. Штраф/награда за окончание игры
     if game_over_flag:
-        if max_tile_after >= 2048: # Условие победы
+        if max_tile_after >= 2048:
             reward += REWARD_WIN_2048
         else:
-            # Штраф за проигрыш игры
-            reward += PENALTY_GAME_OVER
-            # Можно добавить более сложный штраф, зависящий от достигнутой плитки,
-            # но пока ограничимся фиксированным значением для простоты.
+            # Штраф более чувствителен к низкой максимальной плитке при проигрыше
+            penalty_game_over_scaled = PENALTY_GAME_OVER
+            if max_tile_after > 0: 
+                 # Чем выше плитка, тем меньше штраф (ближе к 0)
+                 # Чем плитка ближе к 2, тем штраф ближе к PENALTY_GAME_OVER
+                 penalty_scale_factor = (np.log2(2048.0 + epsilon_log) - np.log2(max_tile_after + epsilon_log)) / (np.log2(2048.0 + epsilon_log) - np.log2(2.0 + epsilon_log) + epsilon_log)
+                 penalty_game_over_scaled *= penalty_scale_factor
+            else: # Проигрыш с пустой доской или только с плиткой 2 - максимальный штраф
+                 penalty_game_over_scaled = PENALTY_GAME_OVER * 1.2 # Еще чуть больше
 
-    # Параметры (score_before, score_after, board_changed_by_move, action_taken)
-    # пока не используются для упрощения, но остаются для возможного будущего расширения.
-    return reward
+            reward += penalty_game_over_scaled
+            if max_tile_after < 32 : # Дополнительный сильный штраф, если проиграли с очень низкой плиткой (меньше 32)
+                reward -= 100.0 
+            elif max_tile_after < 128: # Мягче штраф, если меньше 128
+                reward -= 50.0
+
+    return np.clip(reward, -400.0, 1700.0) # Обновим границы клиппинга
 
 # --- Параметры обучения ---
 NUM_EPISODES = 3000 
@@ -142,6 +290,9 @@ avg_scores_history = []
 max_tile_history = [] # Для отслеживания максимальной плитки
 
 print(f"Начинаем обучение на {DEVICE}...")
+
+# --- Переменная для отслеживания лучшего результата ---
+best_avg_score = -float('inf') # Инициализируем очень маленьким числом
 
 # --- Цикл обучения ---
 for episode in range(1, NUM_EPISODES + 1):
@@ -197,6 +348,12 @@ for episode in range(1, NUM_EPISODES + 1):
     avg_scores_history.append(avg_score)
 
     print(f"Эпизод: {episode}/{NUM_EPISODES}, Счет: {game_env.score}, Макс.плитка: {episode_max_tile}, Сред.счет(100): {avg_score:.2f}, Сред.макс.пл(100): {avg_max_tile:.1f}, Epsilon: {agent.epsilon:.4f}, Шаги: {step+1}")
+
+    # Сохранение лучшей модели по среднему счету
+    if avg_score > best_avg_score:
+        best_avg_score = avg_score
+        agent.save(f"dqn_2048_pytorch_best_avg_score.pth")
+        print(f"*** Новая лучшая модель сохранена с AvgScore: {best_avg_score:.2f} в эпизоде {episode} ***")
 
     if episode % 100 == 0: 
         agent.save(f"dqn_2048_pytorch_ep{episode}.pth")

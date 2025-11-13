@@ -35,6 +35,22 @@ class Game:
         # Store info about the newly added tile for the 'appear' animation
         self.last_added_tile_info = {'type': 'appear', 'pos_rc': (r, c), 'value': new_value}
         return True
+        
+    def peek_move(self, direction: int):
+        """
+        Проверяет, изменит ли ход доску, не меняя ее состояния.
+        Возвращает True, если доска изменится, иначе False.
+        """
+        import copy
+        
+        # Создаем глубокую копию текущего состояния игры
+        temp_game = copy.deepcopy(self)
+        
+        # Пытаемся сделать ход на временной копии
+        animation_events = temp_game.move(direction)
+        
+        # Если ход привел к каким-либо событиям (изменениям), он валиден
+        return bool(animation_events)
 
     def _compress_row(self, row_data, row_index, current_move_events):
         """
