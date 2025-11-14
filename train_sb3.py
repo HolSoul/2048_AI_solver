@@ -56,14 +56,47 @@ PRETRAINED_MODEL_PATH = Path("ppo2_2048_custom_cnn.zip")
 MODEL_SAVE_PATH = "ppo2_2048_custom_cnn_finetuned.zip"
 TOTAL_TIMESTEPS = 2_000_000
 HARD_DATASET_PATH = Path("datasets/hard_positions.json")
-HARD_START_PROB = 0.5
+HARD_START_PROB = 0.7  # Вероятность старта с хард позиции при каждом reset()
+
+# Расчет оптимального размера датасета:
+# При HARD_START_PROB=0.7 и средней длине игры ~750 шагов:
+# - Количество ресетов = TOTAL_TIMESTEPS / 750
+# - Хард стартов = ресетов * HARD_START_PROB
+# - Использований на позицию = хард стартов / размер_датасета
+# 
+# Рекомендации для 120M timesteps:
+# - 5,000-10,000 позиций: ~8-16 использований каждой позиции (хорошо)
+# - 10,000-20,000 позиций: ~4-8 использований (отлично, больше разнообразия)
+# - 1,000 позиций: ~112 использований (слишком часто, переобучение)
 
 
 def load_hard_states():
     if HARD_DATASET_PATH.exists():
         with HARD_DATASET_PATH.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        print(f"Загружено сложных позиций: {len(data)}")
+        dataset_size = len(data)
+        print(f"Загружено сложных позиций: {dataset_size}")
+        
+        # Расчет статистики использования
+        avg_game_length = 750  # примерная средняя длина игры
+        num_resets = TOTAL_TIMESTEPS / avg_game_length
+        hard_starts = num_resets * HARD_START_PROB
+        uses_per_position = hard_starts / dataset_size if dataset_size > 0 else 0
+        
+        print(f"Ожидаемая статистика для {TOTAL_TIMESTEPS:,} timesteps:")
+        print(f"  - Ресетов: ~{num_resets:,.0f}")
+        print(f"  - Хард стартов: ~{hard_starts:,.0f} ({HARD_START_PROB*100:.0f}%)")
+        print(f"  - Использований на позицию: ~{uses_per_position:.1f}")
+        
+        if uses_per_position > 50:
+            print(f"  ⚠️  ВНИМАНИЕ: Каждая позиция будет использована >50 раз!")
+            print(f"     Рекомендуется увеличить датасет до {int(hard_starts/20):,}-{int(hard_starts/10):,} позиций")
+        elif uses_per_position > 20:
+            print(f"  ⚠️  Каждая позиция будет использована >20 раз")
+            print(f"     Рекомендуется увеличить датасет до {int(hard_starts/15):,}-{int(hard_starts/8):,} позиций")
+        else:
+            print(f"  ✓ Разнообразие датасета достаточное")
+        
         return data
     print("Файл сложных позиций не найден, обучение начнется с обычных стартов.")
     return []

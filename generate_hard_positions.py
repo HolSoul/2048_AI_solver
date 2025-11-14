@@ -5,19 +5,18 @@ from typing import Dict, List, Tuple
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
-from gymnasium.wrappers import TimeLimit
 
 from game_env import Game2048Env
 import pygame
 
 
-MODEL_PATH = "ppo2_2048_custom_cnn.zip"
-OUTPUT_PATH = Path("datasets") / "hard_positions.json"
-NUM_ENVS = 10
-TARGET_DATASET_SIZE = 100
+MODEL_PATH = "ppo2_2048_custom_cnn_finetuned.zip"
+OUTPUT_PATH = Path("datasets") / "hard_positions_20k.json"
+NUM_ENVS = 20
+TARGET_DATASET_SIZE = 20000
 MIN_MAX_TILE = 64
-MAX_EMPTY_CELLS = 8
-MIN_EMPTY_CELLS = 1
+MAX_EMPTY_CELLS = 10
+MIN_EMPTY_CELLS = 4
 VISUALIZE = True
 
 # Визуализация: сетка 5x4 для 20 окружений
@@ -31,8 +30,7 @@ FONT_SIZE = 14
 
 def make_env():
     def _init():
-        base = Game2048Env(state_mode="2d", reward_mode="complex")
-        return TimeLimit(base, max_episode_steps=800)
+        return Game2048Env(state_mode="2d", reward_mode="complex")
 
     return _init
 
@@ -127,6 +125,7 @@ def main():
     # динамические пороги
     dynamic_min_max = MIN_MAX_TILE
     dynamic_max_empty = MAX_EMPTY_CELLS
+    dynamic_min_empty = MIN_EMPTY_CELLS
 
     while len(collected_states) < TARGET_DATASET_SIZE:
         step_counter += 1
@@ -142,7 +141,7 @@ def main():
             actions = np.random.randint(0, 4, size=(NUM_ENVS,), dtype=np.int64)
         else:
             actions, _ = model.predict(observations, deterministic=True)
-        observations, _, dones, infos = env.step(actions)
+        observations, rewards, dones, infos = env.step(actions)
 
         if running_vis:
             draw(infos, len(collected_states))
@@ -150,10 +149,19 @@ def main():
         for info in infos:
             board = np.array(info["board"], dtype=np.int32)
             # ужесточаем критерии после половины датасета
-            if len(collected_states) >= TARGET_DATASET_SIZE // 2:
+            if len(collected_states) >= TARGET_DATASET_SIZE // 4:
                 dynamic_min_max = 128
-                dynamic_max_empty = 6
-
+                dynamic_max_empty = 8
+                dynamic_min_empty = 4
+            if len(collected_states) >= TARGET_DATASET_SIZE // 2:
+                dynamic_min_max = 256
+                dynamic_max_empty = 8
+                dynamic_min_empty = 4
+            if len(collected_states) >= TARGET_DATASET_SIZE // 1.3:
+                dynamic_min_max = 128
+                dynamic_max_empty = 4
+                dynamic_min_empty = 2
+            
             max_tile = int(board.max())
             empty_cells = int(np.sum(board == 0))
             if not (max_tile >= dynamic_min_max and MIN_EMPTY_CELLS <= empty_cells <= dynamic_max_empty):
@@ -175,9 +183,17 @@ def main():
                       f"(max={max_tile}, empty={empty_cells}, "
                       f"min_req={dynamic_min_max}, max_empty={dynamic_max_empty})", flush=True)
 
-        if np.all(dones):
-            observations = env.reset()
-        elif step_counter % 200 == 0 and len(collected_states) == printed_count:
+        # Ресетим только те среды, которые действительно закончились (game over)
+        # Без TimeLimit wrapper, done=True означает только реальный game over
+        reset_indices = [idx for idx, done in enumerate(dones) if done]
+        
+        if reset_indices:
+            # Ресетим только среды с реальным game over через env_method
+            new_obs_list = env.env_method("reset", indices=reset_indices)
+            for i, orig_idx in enumerate(reset_indices):
+                observations[orig_idx] = new_obs_list[i][0]  # env_method возвращает список (obs, info)
+        
+        if step_counter % 200 == 0 and len(collected_states) == printed_count:
             # Heartbeat, если долго нет новых позиций
             print(f"[progress] steps={step_counter}, collected={printed_count}/{TARGET_DATASET_SIZE}", flush=True)
 
