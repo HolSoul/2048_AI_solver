@@ -4,51 +4,11 @@ import json
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 from stable_baselines3 import PPO
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.vec_env import DummyVecEnv
 import gymnasium as gym
 from game_env import Game2048Env # Наша среда
-
-# --- ШАГ 1: Создание кастомного CNN Feature Extractor ---
-# Эта нейросеть будет специально разработана для обработки доски 4x4.
-class CustomCnnExtractor(BaseFeaturesExtractor):
-    """
-    :param observation_space: The observation space of the environment.
-    :param features_dim: Number of features extracted.
-        This corresponds to the number of unit for the last layer.
-    """
-    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 128):
-        super().__init__(observation_space, features_dim)
-        # Мы предполагаем, что на вход приходит (N, 1, 4, 4)
-        # N - размер батча, 1 - количество каналов, 4x4 - размер доски
-        
-        # Определяем нашу простую сверточную сеть
-        self.cnn = nn.Sequential(
-            # Первый сверточный слой: 1 входной канал, 32 выходных, ядро 2x2
-            nn.Conv2d(1, 32, kernel_size=2, stride=1, padding=0),
-            nn.ReLU(),
-            # Второй сверточный слой: 32 входных, 64 выходных, ядро 2x2
-            nn.Conv2d(32, 64, kernel_size=2, stride=1, padding=0),
-            nn.ReLU(),
-            # "Выпрямляем" результат в плоский вектор
-            nn.Flatten(),
-        )
-
-        # Вычисляем размерность после сверток, чтобы создать правильный линейный слой
-        # Для входа (1, 4, 4):
-        # После Conv1(2x2): (32, 3, 3)
-        # После Conv2(2x2): (64, 2, 2)
-        # После Flatten: 64 * 2 * 2 = 256
-        self.linear = nn.Sequential(
-            nn.Linear(256, features_dim),
-            nn.ReLU()
-        )
-
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        # Применяем сверточные слои, затем линейный
-        return self.linear(self.cnn(observations))
+from custom_extractor import CustomCnnExtractor
 
 
 # --- Параметры ---

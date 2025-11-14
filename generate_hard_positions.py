@@ -3,10 +3,12 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from game_env import Game2048Env
+from custom_extractor import CustomCnnExtractor
 import pygame
 
 
@@ -18,6 +20,12 @@ MIN_MAX_TILE = 64
 MAX_EMPTY_CELLS = 10
 MIN_EMPTY_CELLS = 4
 VISUALIZE = True
+
+POLICY_KWARGS = dict(
+    features_extractor_class=CustomCnnExtractor,
+    features_extractor_kwargs=dict(features_dim=128),
+    net_arch=dict(pi=[128], vf=[128])
+)
 
 # Визуализация: сетка 5x4 для 20 окружений
 GRID_COLS = 5
@@ -48,7 +56,12 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     env = SubprocVecEnv([make_env() for _ in range(NUM_ENVS)])
-    model = PPO.load(MODEL_PATH, env=env, device="cpu")
+    model = PPO.load(
+        MODEL_PATH,
+        env=env,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        custom_objects=dict(policy_kwargs=POLICY_KWARGS),
+    )
 
     # Визуализация
     screen = None
@@ -164,7 +177,7 @@ def main():
             
             max_tile = int(board.max())
             empty_cells = int(np.sum(board == 0))
-            if not (max_tile >= dynamic_min_max and MIN_EMPTY_CELLS <= empty_cells <= dynamic_max_empty):
+            if not (max_tile >= dynamic_min_max and dynamic_min_empty <= empty_cells <= dynamic_max_empty):
                 continue
 
             key = tuple(board.flatten().tolist())
