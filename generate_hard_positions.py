@@ -14,8 +14,8 @@ import pygame
 
 MODEL_PATH = "ppo2_2048_custom_cnn_finetuned.zip"
 OUTPUT_PATH = Path("datasets") / "hard_positions_20k.json"
-NUM_ENVS = 20
-TARGET_DATASET_SIZE = 20000
+NUM_ENVS = 100
+TARGET_DATASET_SIZE = 10000
 MIN_MAX_TILE = 64
 MAX_EMPTY_CELLS = 10
 MIN_EMPTY_CELLS = 4
@@ -28,9 +28,9 @@ POLICY_KWARGS = dict(
 )
 
 # Визуализация: сетка 5x4 для 20 окружений
-GRID_COLS = 5
-GRID_ROWS = 4
-TILE_SIZE = 26
+GRID_COLS = 10
+GRID_ROWS = 10
+TILE_SIZE = 14
 CELL_GAP = 2
 BOARD_PAD = 4
 FONT_SIZE = 14
@@ -167,13 +167,9 @@ def main():
                 dynamic_max_empty = 8
                 dynamic_min_empty = 4
             if len(collected_states) >= TARGET_DATASET_SIZE // 2:
-                dynamic_min_max = 256
-                dynamic_max_empty = 8
-                dynamic_min_empty = 4
-            if len(collected_states) >= TARGET_DATASET_SIZE // 1.3:
                 dynamic_min_max = 128
                 dynamic_max_empty = 4
-                dynamic_min_empty = 2
+                dynamic_min_empty = 1
             
             max_tile = int(board.max())
             empty_cells = int(np.sum(board == 0))

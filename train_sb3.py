@@ -12,11 +12,11 @@ from custom_extractor import CustomCnnExtractor
 
 
 # --- Параметры ---
-PRETRAINED_MODEL_PATH = Path("ppo2_2048_custom_cnn.zip")
-MODEL_SAVE_PATH = "ppo2_2048_custom_cnn_finetuned.zip"
-TOTAL_TIMESTEPS = 2_000_000
+PRETRAINED_MODEL_PATH = Path("ppo2_2048_custom_cnn_finetuned.zip")
+MODEL_SAVE_PATH = "ppo2_2048_custom_cnn_finetuned_ft.zip"
+TOTAL_TIMESTEPS = 120_000_000
 HARD_DATASET_PATH = Path("datasets/hard_positions.json")
-HARD_START_PROB = 0.7  # Вероятность старта с хард позиции при каждом reset()
+HARD_START_PROB = 0.3  # Вероятность старта с хард позиции при каждом reset()
 
 # Расчет оптимального размера датасета:
 # При HARD_START_PROB=0.7 и средней длине игры ~750 шагов:
